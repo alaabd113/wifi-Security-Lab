@@ -7,8 +7,10 @@ Android Wi-Fi security assessment companion for authorized home and university l
 - Wi-Fi scan results: SSID, BSSID, frequency/band, RSSI, and advertised security capabilities.
 - Local security assessment based on advertised security mode.
 - WPS status is explicitly reported as **unknown** when Android does not expose it. Android's public Wi-Fi scan API does not provide a reliable WPS-PIN audit interface.
-- Manual router inventory for TP-Link, D-Link, and NETIS, including NETIS NC21 (HW V2 / FW V4.0).
+- Offline router identification hints for NETIS NC21 and TP-Link Archer/TL-WR and D-Link DIR families; matches are not vulnerability findings and require exact hardware/firmware verification.
+- Local SQLite audit history storing scan time, network count, and high-risk count only; no SSIDs, BSSIDs, passwords, or PINs are stored in this history.
 - Exportable plain-text assessment report.
+- Unit tests for conservative router-profile matching.
 - GitHub Actions builds a debug APK and uploads it as an artifact.
 
 ## Safety and technical limits
