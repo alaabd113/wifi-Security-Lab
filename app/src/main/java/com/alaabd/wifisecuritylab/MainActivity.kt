@@ -475,6 +475,7 @@ private fun DetailLine(label: String, value: String) {
 
 @Composable
 private fun WpsScreen(routerName: String, onRouterName: (String) -> Unit) {
+    val matchedProfile = remember(routerName) { findRouterProfile(routerName) }
     LazyColumn(
         Modifier.fillMaxSize().padding(horizontal = 16.dp),
         contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp),
@@ -512,17 +513,36 @@ private fun WpsScreen(routerName: String, onRouterName: (String) -> Unit) {
                 }
             }
         }
+        if (routerName.isNotBlank()) {
+            item {
+                Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(17.dp)) {
+                    Column(Modifier.padding(15.dp)) {
+                        Text("نتيجة مطابقة قاعدة الأجهزة", color = Cyan, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        if (matchedProfile == null) {
+                            Text("لم يتم العثور على تطابق موثوق. أدخل اسم الطراز الكامل ورقم Hardware Version يدوياً.", color = Muted, fontSize = 11.sp, lineHeight = 17.sp)
+                        } else {
+                            Text("${matchedProfile.vendor} — ${matchedProfile.model}", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            Spacer(Modifier.height(6.dp))
+                            matchedProfile.auditNotes.forEach { note ->
+                                Text("• $note", color = Muted, fontSize = 11.sp, lineHeight = 17.sp)
+                            }
+                            Spacer(Modifier.height(6.dp))
+                            Text("مطابقة اسم فقط؛ ليست كشفاً عن ثغرة أو إثباتاً لحالة WPS.", color = Gold, fontSize = 10.sp)
+                        }
+                    }
+                }
+            }
+        }
         item { SectionTitle("خطوات التدقيق اليدوي", "على الراوتر نفسه") }
         item { StepCard("01", "افتح لوحة تحكم الراوتر", "اتصل بشبكتك وافتح عنوان الإدارة المكتوب على ملصق الراوتر أو في دليله.") }
         item { StepCard("02", "ابحث عن WPS", "غالباً يوجد ضمن Wireless أو Wi‑Fi Protected Setup أو إعدادات الأمان.") }
         item { StepCard("03", "تحقق من حالة PIN و Push Button", "إذا كان WPS مفعّلاً، عطّله. لا تشارك PIN أو بيانات الدخول مع أي شخص.") }
         item { StepCard("04", "احفظ التغييرات وحدّث الراوتر", "استخدم WPA2-AES أو WPA3 وكلمة مرور قوية، ثم حدّث البرنامج الثابت.") }
         item {
-            OutlinedButton(
-                onClick = { /* Open Android Wi-Fi settings for the user's own connection */ },
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = Cyan)
-            ) { Text("ملاحظة: إعداد WPS يتم من لوحة الراوتر، وليس من إعدادات Wi‑Fi في الهاتف") }
+            Text(
+                "ملاحظة: إعداد WPS يتم من لوحة تحكم الراوتر؛ إعدادات Wi-Fi في الهاتف لا تعرض حالة WPS PIN بصورة موثوقة.",
+                color = Muted, fontSize = 10.sp, lineHeight = 16.sp
+            )
         }
     }
 }
