@@ -285,8 +285,7 @@ private fun HomeScreen(
                 Column(Modifier.fillMaxWidth().padding(19.dp)) {
                     Text("لوحة التحكم", color = Gold, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(6.dp))
-                    Text("افحص شبكتك.
-افهم مستوى حمايتها.", color = Color.White, fontSize = 25.sp, lineHeight = 32.sp, fontWeight = FontWeight.Bold)
+                    Text("افحص شبكتك.\nافهم مستوى حمايتها.", color = Color.White, fontSize = 25.sp, lineHeight = 32.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(8.dp))
                     Text("اكتشاف الشبكات القريبة وتحليل نوع التشفير ومؤشرات المخاطر.", color = Muted, fontSize = 12.sp, lineHeight = 19.sp)
                     Spacer(Modifier.height(18.dp))
@@ -402,7 +401,7 @@ private fun NetworksScreen(
             LazyColumn(verticalArrangement = Arrangement.spacedBy(9.dp), contentPadding = PaddingValues(bottom = 20.dp)) {
                 items(findings, key = { it.bssid }) { f ->
                     NetworkCard(f, onClick = { onSelect(if (selected?.bssid == f.bssid) null else f) })
-                    if (selected?.bssid == f.bssid) NetworkDetails(f)
+                    selected?.takeIf { it.bssid == f.bssid }?.let { NetworkDetails(it) }
                 }
             }
         }
