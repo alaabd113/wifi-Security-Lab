@@ -112,6 +112,8 @@ private fun analyze(result: ScanResult): WifiFinding {
 private fun WifiLabApp() {
     val context = LocalContext.current
     val wifi = remember { context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager }
+    val historyStore = remember { AuditHistoryStore(context) }
+    var history by remember { mutableStateOf(historyStore.getRecent()) }
     val scope = rememberCoroutineScope()
     var findings by remember { mutableStateOf(emptyList<WifiFinding>()) }
     var status by remember { mutableStateOf("جاهز للفحص — اسمح بصلاحيات Wi‑Fi أولاً") }
@@ -149,7 +151,9 @@ private fun WifiLabApp() {
                     .sortedByDescending { it.level }
                     .map { analyze(it) }
                 findings = list
-                lastScan = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+                lastScan = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+                historyStore.saveSnapshot(list, lastScan)
+                history = historyStore.getRecent()
                 status = if (list.isEmpty()) "لم تصل نتائج. تحقق من تفعيل الموقع وصلاحيات Wi‑Fi؛ قد يقيّد Android تكرار المسح."
                     else "اكتمل المسح: تم العثور على ${list.size} شبكة."
             } catch (_: SecurityException) {
@@ -236,7 +240,7 @@ private fun WifiLabApp() {
                     )
                     LabTab.WPS -> WpsScreen(routerName = routerName, onRouterName = { routerName = it })
                     LabTab.REPORT -> ReportScreen(
-                        count = findings.size, lastScan = lastScan,
+                        count = findings.size, lastScan = lastScan, history = history,
                         onShare = { shareReport() }, enabled = findings.isNotEmpty()
                     )
                 }
@@ -564,7 +568,7 @@ private fun StepCard(number: String, title: String, detail: String) {
 }
 
 @Composable
-private fun ReportScreen(count: Int, lastScan: String, onShare: () -> Unit, enabled: Boolean) {
+private fun ReportScreen(count: Int, lastScan: String, history: List<AuditSnapshot>, onShare: () -> Unit, enabled: Boolean) {
     Column(
         Modifier.fillMaxSize().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(13.dp)
@@ -573,6 +577,26 @@ private fun ReportScreen(count: Int, lastScan: String, onShare: () -> Unit, enab
         Text("ملخص الفحص المحلي على هذا الجهاز.", color = Muted, fontSize = 11.sp)
         MetricCard("الشبكات المسجلة في آخر مسح", count.toString(), "شبكة", Modifier.fillMaxWidth(), Cyan)
         MetricCard("آخر عملية فحص", lastScan, "وقت التنفيذ", Modifier.fillMaxWidth(), Gold)
+        Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(16.dp)) {
+            Column(Modifier.fillMaxWidth().padding(15.dp)) {
+                Text("سجل عمليات الفحص المحفوظ", color = Gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                Spacer(Modifier.height(8.dp))
+                if (history.isEmpty()) {
+                    Text("لا توجد عمليات محفوظة بعد.", color = Muted, fontSize = 11.sp)
+                } else {
+                    history.take(10).forEach { entry ->
+                        Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Column(Modifier.weight(1f)) {
+                                Text(entry.scannedAt, color = Color.White, fontSize = 10.sp)
+                                Text(entry.networkCount.toString() + " شبكة", color = Muted, fontSize = 10.sp)
+                            }
+                            Text(entry.highRiskCount.toString() + " مخاطر مرتفعة", color = if (entry.highRiskCount > 0) Red else Green, fontSize = 10.sp)
+                        }
+                    }
+                }
+                Text("السجل محفوظ محلياً على الهاتف ولا يُرفع إلى أي خادم.", color = Muted, fontSize = 9.sp)
+            }
+        }
         Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(16.dp)) {
             Column(Modifier.padding(15.dp)) {
                 Text("محتوى التقرير", color = Gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
