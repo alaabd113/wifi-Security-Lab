@@ -383,7 +383,7 @@ private fun EmptyState(title: String, message: String) {
 @Composable
 private fun NetworksScreen(
     findings: List<WifiFinding>, selected: WifiFinding?,
-    onSelect: (WifiFinding) -> Unit, onScan: () -> Unit, scanning: Boolean
+    onSelect: (WifiFinding?) -> Unit, onScan: () -> Unit, scanning: Boolean
 ) {
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
