@@ -2,6 +2,8 @@ package com.alaabd.wifisecuritylab
 
 import android.Manifest
 import android.content.Context
+import android.content.BroadcastReceiver
+import android.content.IntentFilter
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.wifi.ScanResult
@@ -32,6 +34,9 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -78,6 +83,55 @@ private fun requiredPermissions(): Array<String> {
 
 private fun hasScanPermissions(context: Context): Boolean =
     requiredPermissions().all { ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED }
+
+private suspend fun requestFreshWifiScan(context: Context, wifi: WifiManager): List<ScanResult>? =
+    suspendCancellableCoroutine { continuation ->
+        val appContext = context.applicationContext
+        var registered = false
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(receiverContext: Context?, intent: Intent?) {
+                if (intent?.action != WifiManager.SCAN_RESULTS_AVAILABLE_ACTION) return
+                val updated = intent.getBooleanExtra(WifiManager.EXTRA_RESULTS_UPDATED, false)
+                val results = if (updated) {
+                    @Suppress("DEPRECATION")
+                    wifi.scanResults.orEmpty()
+                } else null
+                if (continuation.isActive) continuation.resume(results)
+                if (registered) {
+                    try { appContext.unregisterReceiver(this) } catch (_: IllegalArgumentException) { }
+                    registered = false
+                }
+            }
+        }
+        try {
+            ContextCompat.registerReceiver(
+                appContext, receiver, IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION),
+                ContextCompat.RECEIVER_NOT_EXPORTED
+            )
+            registered = true
+            continuation.invokeOnCancellation {
+                if (registered) {
+                    try { appContext.unregisterReceiver(receiver) } catch (_: IllegalArgumentException) { }
+                    registered = false
+                }
+            }
+            @Suppress("DEPRECATION")
+            val started = wifi.startScan()
+            if (!started) {
+                if (registered) {
+                    try { appContext.unregisterReceiver(receiver) } catch (_: IllegalArgumentException) { }
+                    registered = false
+                }
+                if (continuation.isActive) continuation.resume(null)
+            }
+        } catch (error: SecurityException) {
+            if (registered) {
+                try { appContext.unregisterReceiver(receiver) } catch (_: IllegalArgumentException) { }
+                registered = false
+            }
+            if (continuation.isActive) continuation.resume(null)
+        }
+    }
 
 private fun analyze(result: ScanResult): WifiFinding {
     val caps = result.capabilities.orEmpty()
@@ -159,25 +213,26 @@ private fun WifiLabApp() {
             return
         }
         scanning = true
-        status = "جارٍ طلب نتائج المسح من نظام Android…"
-        @Suppress("DEPRECATION")
-        val accepted = try { wifi.startScan() } catch (_: SecurityException) { false }
+        status = "جارٍ تنفيذ مسح Wi-Fi وانتظار نتيجة النظام…"
         scope.launch {
-            delay(if (accepted) 2300 else 500)
             try {
-                @Suppress("DEPRECATION")
-                val list = wifi.scanResults.orEmpty()
-                    .distinctBy { it.BSSID }
-                    .sortedByDescending { it.level }
-                    .map { analyze(it) }
-                findings = list
-                lastScan = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-                historyStore.saveSnapshot(list, lastScan)
-                history = historyStore.getRecent()
-                status = if (list.isEmpty()) "لم تصل نتائج. تحقق من تفعيل الموقع وصلاحيات Wi‑Fi؛ قد يقيّد Android تكرار المسح."
-                    else "اكتمل المسح: تم العثور على ${list.size} شبكة."
+                val scanResults = withTimeoutOrNull(15_000L) { requestFreshWifiScan(context, wifi) }
+                if (scanResults == null) {
+                    status = "لم يبدأ Android مسحاً جديداً أو لم تصل النتيجة خلال 15 ثانية. قد يفرض النظام مهلة بين عمليات المسح؛ النتائج القديمة لم تُعرض على أنها جديدة."
+                } else {
+                    val list = scanResults
+                        .distinctBy { it.BSSID }
+                        .sortedByDescending { it.level }
+                        .map { analyze(it) }
+                    findings = list
+                    lastScan = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+                    historyStore.saveSnapshot(list, lastScan)
+                    history = historyStore.getRecent()
+                    status = if (list.isEmpty()) "اكتمل المسح ولم يعرض Android شبكات. تحقق من الموقع والصلاحيات وإعدادات Wi-Fi."
+                        else "اكتمل المسح الجديد: تم العثور على ${list.size} شبكة."
+                }
             } catch (_: SecurityException) {
-                status = "رفض Android قراءة النتائج. راجع أذونات التطبيق."
+                status = "رفض Android بدء المسح أو قراءة النتائج. راجع أذونات التطبيق."
             } finally {
                 scanning = false
             }
