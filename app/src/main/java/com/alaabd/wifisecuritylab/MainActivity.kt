@@ -122,11 +122,31 @@ private fun WifiLabApp() {
     var selectedNetwork by remember { mutableStateOf<WifiFinding?>(null) }
     var lastScan by remember { mutableStateOf("لم يتم الفحص بعد") }
     var routerName by remember { mutableStateOf("") }
+    var pdfStatus by remember { mutableStateOf("") }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { result ->
         status = if (result.values.all { it }) "تم منح الصلاحيات. اضغط ابدأ الفحص." else "الصلاحيات غير مكتملة. اسمح بالوصول إلى الأجهزة القريبة والموقع."
+    }
+
+    val pdfLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/pdf")
+    ) { uri ->
+        if (uri != null) {
+            try {
+                val output = context.contentResolver.openOutputStream(uri)
+                    ?: throw IllegalStateException("تعذر فتح ملف التقرير")
+                output.use {
+                    val stamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+                    val device = "${Build.MANUFACTURER} ${Build.MODEL} / Android ${Build.VERSION.RELEASE}"
+                    PdfReportWriter.write(it, findings, stamp, device)
+                }
+                pdfStatus = "تم حفظ تقرير PDF بنجاح."
+            } catch (error: Exception) {
+                pdfStatus = "تعذر إنشاء التقرير: ${error.localizedMessage ?: "خطأ غير معروف"}"
+            }
+        }
     }
 
     fun scan() {
@@ -241,7 +261,8 @@ private fun WifiLabApp() {
                     LabTab.WPS -> WpsScreen(routerName = routerName, onRouterName = { routerName = it })
                     LabTab.REPORT -> ReportScreen(
                         count = findings.size, lastScan = lastScan, history = history,
-                        onShare = { shareReport() }, enabled = findings.isNotEmpty()
+                        onShare = { shareReport() }, onExportPdf = { pdfLauncher.launch("wifi-security-report.pdf") },
+                        pdfStatus = pdfStatus, enabled = findings.isNotEmpty()
                     )
                 }
             }
@@ -568,7 +589,7 @@ private fun StepCard(number: String, title: String, detail: String) {
 }
 
 @Composable
-private fun ReportScreen(count: Int, lastScan: String, history: List<AuditSnapshot>, onShare: () -> Unit, enabled: Boolean) {
+private fun ReportScreen(count: Int, lastScan: String, history: List<AuditSnapshot>, onShare: () -> Unit, onExportPdf: () -> Unit, pdfStatus: String, enabled: Boolean) {
     Column(
         Modifier.fillMaxSize().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(13.dp)
@@ -610,6 +631,15 @@ private fun ReportScreen(count: Int, lastScan: String, history: List<AuditSnapsh
             colors = ButtonDefaults.buttonColors(containerColor = Gold, contentColor = Navy),
             shape = RoundedCornerShape(14.dp)
         ) { Text("مشاركة تقرير الفحص", fontWeight = FontWeight.Bold) }
+        OutlinedButton(
+            onClick = onExportPdf,
+            modifier = Modifier.fillMaxWidth().height(50.dp),
+            shape = RoundedCornerShape(14.dp),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = Cyan)
+        ) { Text("تصدير تقرير PDF", fontWeight = FontWeight.Bold) }
+        if (pdfStatus.isNotBlank()) {
+            Text(pdfStatus, color = if (pdfStatus.startsWith("تم")) Green else Red, fontSize = 10.sp)
+        }
         Text("التقرير لا يتضمن كلمات مرور ولا PIN ولا يدّعي اختبار اختراق لم يتم تنفيذه.", color = Muted, fontSize = 10.sp, lineHeight = 16.sp)
     }
 }
