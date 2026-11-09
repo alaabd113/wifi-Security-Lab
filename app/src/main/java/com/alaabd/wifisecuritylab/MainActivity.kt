@@ -2,6 +2,8 @@ package com.alaabd.wifisecuritylab
 
 import android.Manifest
 import android.content.Context
+import android.content.BroadcastReceiver
+import android.content.IntentFilter
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.wifi.ScanResult
@@ -32,6 +34,9 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -79,6 +84,55 @@ private fun requiredPermissions(): Array<String> {
 private fun hasScanPermissions(context: Context): Boolean =
     requiredPermissions().all { ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED }
 
+private suspend fun requestFreshWifiScan(context: Context, wifi: WifiManager): List<ScanResult>? =
+    suspendCancellableCoroutine { continuation ->
+        val appContext = context.applicationContext
+        var registered = false
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(receiverContext: Context?, intent: Intent?) {
+                if (intent?.action != WifiManager.SCAN_RESULTS_AVAILABLE_ACTION) return
+                val updated = intent.getBooleanExtra(WifiManager.EXTRA_RESULTS_UPDATED, false)
+                val results = if (updated) {
+                    @Suppress("DEPRECATION")
+                    wifi.scanResults.orEmpty()
+                } else null
+                if (continuation.isActive) continuation.resume(results)
+                if (registered) {
+                    try { appContext.unregisterReceiver(this) } catch (_: IllegalArgumentException) { }
+                    registered = false
+                }
+            }
+        }
+        try {
+            ContextCompat.registerReceiver(
+                appContext, receiver, IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION),
+                ContextCompat.RECEIVER_NOT_EXPORTED
+            )
+            registered = true
+            continuation.invokeOnCancellation {
+                if (registered) {
+                    try { appContext.unregisterReceiver(receiver) } catch (_: IllegalArgumentException) { }
+                    registered = false
+                }
+            }
+            @Suppress("DEPRECATION")
+            val started = wifi.startScan()
+            if (!started) {
+                if (registered) {
+                    try { appContext.unregisterReceiver(receiver) } catch (_: IllegalArgumentException) { }
+                    registered = false
+                }
+                if (continuation.isActive) continuation.resume(null)
+            }
+        } catch (error: SecurityException) {
+            if (registered) {
+                try { appContext.unregisterReceiver(receiver) } catch (_: IllegalArgumentException) { }
+                registered = false
+            }
+            if (continuation.isActive) continuation.resume(null)
+        }
+    }
+
 private fun analyze(result: ScanResult): WifiFinding {
     val caps = result.capabilities.orEmpty()
     val c = caps.uppercase(Locale.ROOT)
@@ -112,6 +166,8 @@ private fun analyze(result: ScanResult): WifiFinding {
 private fun WifiLabApp() {
     val context = LocalContext.current
     val wifi = remember { context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager }
+    val historyStore = remember { AuditHistoryStore(context) }
+    var history by remember { mutableStateOf(historyStore.getRecent()) }
     val scope = rememberCoroutineScope()
     var findings by remember { mutableStateOf(emptyList<WifiFinding>()) }
     var status by remember { mutableStateOf("جاهز للفحص — اسمح بصلاحيات Wi‑Fi أولاً") }
@@ -120,11 +176,33 @@ private fun WifiLabApp() {
     var selectedNetwork by remember { mutableStateOf<WifiFinding?>(null) }
     var lastScan by remember { mutableStateOf("لم يتم الفحص بعد") }
     var routerName by remember { mutableStateOf("") }
+    var routerHardware by remember { mutableStateOf("") }
+    var routerFirmware by remember { mutableStateOf("") }
+    var pdfStatus by remember { mutableStateOf("") }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { result ->
         status = if (result.values.all { it }) "تم منح الصلاحيات. اضغط ابدأ الفحص." else "الصلاحيات غير مكتملة. اسمح بالوصول إلى الأجهزة القريبة والموقع."
+    }
+
+    val pdfLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/pdf")
+    ) { uri ->
+        if (uri != null) {
+            try {
+                val output = context.contentResolver.openOutputStream(uri)
+                    ?: throw IllegalStateException("تعذر فتح ملف التقرير")
+                output.use {
+                    val stamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+                    val device = "${Build.MANUFACTURER} ${Build.MODEL} / Android ${Build.VERSION.RELEASE}"
+                    PdfReportWriter.write(it, findings, stamp, device)
+                }
+                pdfStatus = "تم حفظ تقرير PDF بنجاح."
+            } catch (error: Exception) {
+                pdfStatus = "تعذر إنشاء التقرير: ${error.localizedMessage ?: "خطأ غير معروف"}"
+            }
+        }
     }
 
     fun scan() {
@@ -137,23 +215,26 @@ private fun WifiLabApp() {
             return
         }
         scanning = true
-        status = "جارٍ طلب نتائج المسح من نظام Android…"
-        @Suppress("DEPRECATION")
-        val accepted = try { wifi.startScan() } catch (_: SecurityException) { false }
+        status = "جارٍ تنفيذ مسح Wi-Fi وانتظار نتيجة النظام…"
         scope.launch {
-            delay(if (accepted) 2300 else 500)
             try {
-                @Suppress("DEPRECATION")
-                val list = wifi.scanResults.orEmpty()
-                    .distinctBy { it.BSSID }
-                    .sortedByDescending { it.level }
-                    .map { analyze(it) }
-                findings = list
-                lastScan = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
-                status = if (list.isEmpty()) "لم تصل نتائج. تحقق من تفعيل الموقع وصلاحيات Wi‑Fi؛ قد يقيّد Android تكرار المسح."
-                    else "اكتمل المسح: تم العثور على ${list.size} شبكة."
+                val scanResults = withTimeoutOrNull(15_000L) { requestFreshWifiScan(context, wifi) }
+                if (scanResults == null) {
+                    status = "لم يبدأ Android مسحاً جديداً أو لم تصل النتيجة خلال 15 ثانية. قد يفرض النظام مهلة بين عمليات المسح؛ النتائج القديمة لم تُعرض على أنها جديدة."
+                } else {
+                    val list = scanResults
+                        .distinctBy { it.BSSID }
+                        .sortedByDescending { it.level }
+                        .map { analyze(it) }
+                    findings = list
+                    lastScan = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+                    historyStore.saveSnapshot(list, lastScan)
+                    history = historyStore.getRecent()
+                    status = if (list.isEmpty()) "اكتمل المسح ولم يعرض Android شبكات. تحقق من الموقع والصلاحيات وإعدادات Wi-Fi."
+                        else "اكتمل المسح الجديد: تم العثور على ${list.size} شبكة."
+                }
             } catch (_: SecurityException) {
-                status = "رفض Android قراءة النتائج. راجع أذونات التطبيق."
+                status = "رفض Android بدء المسح أو قراءة النتائج. راجع أذونات التطبيق."
             } finally {
                 scanning = false
             }
@@ -234,10 +315,15 @@ private fun WifiLabApp() {
                         onSelect = { selectedNetwork = it },
                         onScan = { scan() }, scanning = scanning
                     )
-                    LabTab.WPS -> WpsScreen(routerName = routerName, onRouterName = { routerName = it })
+                    LabTab.WPS -> WpsScreen(
+                        routerName = routerName, onRouterName = { routerName = it },
+                        hardwareVersion = routerHardware, onHardwareVersion = { routerHardware = it },
+                        firmwareVersion = routerFirmware, onFirmwareVersion = { routerFirmware = it }
+                    )
                     LabTab.REPORT -> ReportScreen(
-                        count = findings.size, lastScan = lastScan,
-                        onShare = { shareReport() }, enabled = findings.isNotEmpty()
+                        count = findings.size, lastScan = lastScan, history = history,
+                        onShare = { shareReport() }, onExportPdf = { pdfLauncher.launch("wifi-security-report.pdf") },
+                        pdfStatus = pdfStatus, enabled = findings.isNotEmpty()
                     )
                 }
             }
@@ -474,7 +560,12 @@ private fun DetailLine(label: String, value: String) {
 }
 
 @Composable
-private fun WpsScreen(routerName: String, onRouterName: (String) -> Unit) {
+private fun WpsScreen(
+    routerName: String, onRouterName: (String) -> Unit,
+    hardwareVersion: String, onHardwareVersion: (String) -> Unit,
+    firmwareVersion: String, onFirmwareVersion: (String) -> Unit
+) {
+    val matchedProfile = remember(routerName) { findRouterProfile(routerName) }
     LazyColumn(
         Modifier.fillMaxSize().padding(horizontal = 16.dp),
         contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp),
@@ -509,6 +600,54 @@ private fun WpsScreen(routerName: String, onRouterName: (String) -> Unit) {
                             focusedTextColor = Color.White, unfocusedTextColor = Color.White
                         )
                     )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = hardwareVersion, onValueChange = onHardwareVersion,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Hardware Version") },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Gold, unfocusedBorderColor = Muted,
+                            focusedLabelColor = Gold, unfocusedLabelColor = Muted,
+                            focusedTextColor = Color.White, unfocusedTextColor = Color.White
+                        )
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = firmwareVersion, onValueChange = onFirmwareVersion,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Firmware Version") },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Gold, unfocusedBorderColor = Muted,
+                            focusedLabelColor = Gold, unfocusedLabelColor = Muted,
+                            focusedTextColor = Color.White, unfocusedTextColor = Color.White
+                        )
+                    )
+                    Text(
+                        "تُستخدم هذه البيانات لتوثيق الجهاز فقط؛ لا تُستنتج ثغرة من رقم الإصدار وحده.",
+                        color = Muted, fontSize = 10.sp, lineHeight = 15.sp
+                    )
+                }
+            }
+        }
+        if (routerName.isNotBlank()) {
+            item {
+                Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(17.dp)) {
+                    Column(Modifier.padding(15.dp)) {
+                        Text("نتيجة مطابقة قاعدة الأجهزة", color = Cyan, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        if (matchedProfile == null) {
+                            Text("لم يتم العثور على تطابق موثوق. أدخل اسم الطراز الكامل ورقم Hardware Version يدوياً.", color = Muted, fontSize = 11.sp, lineHeight = 17.sp)
+                        } else {
+                            Text("${matchedProfile.vendor} — ${matchedProfile.model}", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            Spacer(Modifier.height(6.dp))
+                            matchedProfile.auditNotes.forEach { note ->
+                                Text("• $note", color = Muted, fontSize = 11.sp, lineHeight = 17.sp)
+                            }
+                            Spacer(Modifier.height(6.dp))
+                            Text("مطابقة اسم فقط؛ ليست كشفاً عن ثغرة أو إثباتاً لحالة WPS.", color = Gold, fontSize = 10.sp)
+                        }
+                    }
                 }
             }
         }
@@ -518,11 +657,10 @@ private fun WpsScreen(routerName: String, onRouterName: (String) -> Unit) {
         item { StepCard("03", "تحقق من حالة PIN و Push Button", "إذا كان WPS مفعّلاً، عطّله. لا تشارك PIN أو بيانات الدخول مع أي شخص.") }
         item { StepCard("04", "احفظ التغييرات وحدّث الراوتر", "استخدم WPA2-AES أو WPA3 وكلمة مرور قوية، ثم حدّث البرنامج الثابت.") }
         item {
-            OutlinedButton(
-                onClick = { /* Open Android Wi-Fi settings for the user's own connection */ },
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = Cyan)
-            ) { Text("ملاحظة: إعداد WPS يتم من لوحة الراوتر، وليس من إعدادات Wi‑Fi في الهاتف") }
+            Text(
+                "ملاحظة: إعداد WPS يتم من لوحة تحكم الراوتر؛ إعدادات Wi-Fi في الهاتف لا تعرض حالة WPS PIN بصورة موثوقة.",
+                color = Muted, fontSize = 10.sp, lineHeight = 16.sp
+            )
         }
     }
 }
@@ -544,7 +682,7 @@ private fun StepCard(number: String, title: String, detail: String) {
 }
 
 @Composable
-private fun ReportScreen(count: Int, lastScan: String, onShare: () -> Unit, enabled: Boolean) {
+private fun ReportScreen(count: Int, lastScan: String, history: List<AuditSnapshot>, onShare: () -> Unit, onExportPdf: () -> Unit, pdfStatus: String, enabled: Boolean) {
     Column(
         Modifier.fillMaxSize().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(13.dp)
@@ -553,6 +691,26 @@ private fun ReportScreen(count: Int, lastScan: String, onShare: () -> Unit, enab
         Text("ملخص الفحص المحلي على هذا الجهاز.", color = Muted, fontSize = 11.sp)
         MetricCard("الشبكات المسجلة في آخر مسح", count.toString(), "شبكة", Modifier.fillMaxWidth(), Cyan)
         MetricCard("آخر عملية فحص", lastScan, "وقت التنفيذ", Modifier.fillMaxWidth(), Gold)
+        Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(16.dp)) {
+            Column(Modifier.fillMaxWidth().padding(15.dp)) {
+                Text("سجل عمليات الفحص المحفوظ", color = Gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                Spacer(Modifier.height(8.dp))
+                if (history.isEmpty()) {
+                    Text("لا توجد عمليات محفوظة بعد.", color = Muted, fontSize = 11.sp)
+                } else {
+                    history.take(10).forEach { entry ->
+                        Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Column(Modifier.weight(1f)) {
+                                Text(entry.scannedAt, color = Color.White, fontSize = 10.sp)
+                                Text(entry.networkCount.toString() + " شبكة", color = Muted, fontSize = 10.sp)
+                            }
+                            Text(entry.highRiskCount.toString() + " مخاطر مرتفعة", color = if (entry.highRiskCount > 0) Red else Green, fontSize = 10.sp)
+                        }
+                    }
+                }
+                Text("السجل محفوظ محلياً على الهاتف ولا يُرفع إلى أي خادم.", color = Muted, fontSize = 9.sp)
+            }
+        }
         Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(16.dp)) {
             Column(Modifier.padding(15.dp)) {
                 Text("محتوى التقرير", color = Gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
@@ -566,6 +724,15 @@ private fun ReportScreen(count: Int, lastScan: String, onShare: () -> Unit, enab
             colors = ButtonDefaults.buttonColors(containerColor = Gold, contentColor = Navy),
             shape = RoundedCornerShape(14.dp)
         ) { Text("مشاركة تقرير الفحص", fontWeight = FontWeight.Bold) }
+        OutlinedButton(
+            onClick = onExportPdf,
+            modifier = Modifier.fillMaxWidth().height(50.dp),
+            shape = RoundedCornerShape(14.dp),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = Cyan)
+        ) { Text("تصدير تقرير PDF", fontWeight = FontWeight.Bold) }
+        if (pdfStatus.isNotBlank()) {
+            Text(pdfStatus, color = if (pdfStatus.startsWith("تم")) Green else Red, fontSize = 10.sp)
+        }
         Text("التقرير لا يتضمن كلمات مرور ولا PIN ولا يدّعي اختبار اختراق لم يتم تنفيذه.", color = Muted, fontSize = 10.sp, lineHeight = 16.sp)
     }
 }
