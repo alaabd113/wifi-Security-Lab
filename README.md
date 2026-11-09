@@ -9,14 +9,18 @@ Android Wi-Fi security assessment companion for authorized home and university l
 - WPS status is explicitly reported as **unknown** when Android does not expose it. Android's public Wi-Fi scan API does not provide a reliable WPS-PIN audit interface.
 - Offline router identification hints for NETIS NC21 and TP-Link Archer/TL-WR and D-Link DIR families; matches are not vulnerability findings and require exact hardware/firmware verification.
 - Local SQLite audit history storing scan time, network count, and high-risk count only; no SSIDs, BSSIDs, passwords, or PINs are stored in this history.
-- Exportable plain-text assessment report.
+- Shareable plain-text assessment report and paginated PDF export saved through Android's document picker.
+- Fresh scan-result handling through Android's scan broadcast, with explicit timeout/throttling feedback instead of silently presenting cached results as a new scan.
 - Unit tests for conservative router-profile matching.
 - GitHub Actions builds a debug APK and uploads it as an artifact.
 
 ## Safety and technical limits
 This app does not brute-force WPS PINs, guess Wi-Fi passwords, capture handshakes, deauthenticate clients, or attempt access to networks. Use it only on networks you own or are explicitly authorized to assess.
 
-A normal Android app without root cannot perform every low-level 802.11/WPS operation. Android scan throttling, location permissions, OEM firmware, and hardware can limit scan results. WPS state cannot be inferred from SSID/security capability strings; use the router's admin interface or a dedicated authorized lab instrument to verify it.
+A normal Android app without root cannot perform every low-level 802.11/WPS operation. Android scan throttling, location permissions, OEM firmware, and hardware can limit scan results. A rejected or timed-out scan is reported as such; the app does not label cached results as a successful fresh scan. WPS state cannot be inferred from SSID/security capability strings; use the router's admin interface or a dedicated authorized lab instrument to verify it.
+
+## Reports
+PDF reports are generated locally on the device and can be saved to a user-selected location. Reports contain detected network identifiers and security observations, so store and share them carefully. Audit history stores only scan timestamps and aggregate counts.
 
 ## Build
 Open this repository in Android Studio (JDK 17 recommended), or run:
