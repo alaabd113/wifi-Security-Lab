@@ -176,6 +176,8 @@ private fun WifiLabApp() {
     var selectedNetwork by remember { mutableStateOf<WifiFinding?>(null) }
     var lastScan by remember { mutableStateOf("لم يتم الفحص بعد") }
     var routerName by remember { mutableStateOf("") }
+    var routerHardware by remember { mutableStateOf("") }
+    var routerFirmware by remember { mutableStateOf("") }
     var pdfStatus by remember { mutableStateOf("") }
 
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -313,7 +315,11 @@ private fun WifiLabApp() {
                         onSelect = { selectedNetwork = it },
                         onScan = { scan() }, scanning = scanning
                     )
-                    LabTab.WPS -> WpsScreen(routerName = routerName, onRouterName = { routerName = it })
+                    LabTab.WPS -> WpsScreen(
+                        routerName = routerName, onRouterName = { routerName = it },
+                        hardwareVersion = routerHardware, onHardwareVersion = { routerHardware = it },
+                        firmwareVersion = routerFirmware, onFirmwareVersion = { routerFirmware = it }
+                    )
                     LabTab.REPORT -> ReportScreen(
                         count = findings.size, lastScan = lastScan, history = history,
                         onShare = { shareReport() }, onExportPdf = { pdfLauncher.launch("wifi-security-report.pdf") },
@@ -554,7 +560,11 @@ private fun DetailLine(label: String, value: String) {
 }
 
 @Composable
-private fun WpsScreen(routerName: String, onRouterName: (String) -> Unit) {
+private fun WpsScreen(
+    routerName: String, onRouterName: (String) -> Unit,
+    hardwareVersion: String, onHardwareVersion: (String) -> Unit,
+    firmwareVersion: String, onFirmwareVersion: (String) -> Unit
+) {
     val matchedProfile = remember(routerName) { findRouterProfile(routerName) }
     LazyColumn(
         Modifier.fillMaxSize().padding(horizontal = 16.dp),
@@ -589,6 +599,34 @@ private fun WpsScreen(routerName: String, onRouterName: (String) -> Unit) {
                             focusedLabelColor = Gold, unfocusedLabelColor = Muted,
                             focusedTextColor = Color.White, unfocusedTextColor = Color.White
                         )
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = hardwareVersion, onValueChange = onHardwareVersion,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Hardware Version") },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Gold, unfocusedBorderColor = Muted,
+                            focusedLabelColor = Gold, unfocusedLabelColor = Muted,
+                            focusedTextColor = Color.White, unfocusedTextColor = Color.White
+                        )
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = firmwareVersion, onValueChange = onFirmwareVersion,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Firmware Version") },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Gold, unfocusedBorderColor = Muted,
+                            focusedLabelColor = Gold, unfocusedLabelColor = Muted,
+                            focusedTextColor = Color.White, unfocusedTextColor = Color.White
+                        )
+                    )
+                    Text(
+                        "تُستخدم هذه البيانات لتوثيق الجهاز فقط؛ لا تُستنتج ثغرة من رقم الإصدار وحده.",
+                        color = Muted, fontSize = 10.sp, lineHeight = 15.sp
                     )
                 }
             }
